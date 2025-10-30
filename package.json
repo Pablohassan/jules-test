@@ -1,0 +1,27 @@
+{
+  "name": "ai-veille",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel --stream dev",
+    "build": "pnpm --filter ./apps/* build",
+    "start": "pnpm --filter api start",
+    "db:migrate": "pnpm --filter api db:migrate",
+    "db:studio": "pnpm --filter api db:studio",
+    "seed": "pnpm --filter api seed"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "eslint": "^8.0.0",
+    "@typescript-eslint/parser": "^7.16.0",
+    "@typescript-eslint/eslint-plugin": "^7.16.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "prettier": "^3.3.3",
+    "prisma": "^5.22.0",
+    "@prisma/client": "^5.22.0"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}

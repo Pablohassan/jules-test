@@ -1,0 +1,106 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Run {
+  id          String      @id @default(uuid())
+  createdAt   DateTime    @default(now())
+  keywords    String[]
+  daysBack    Int
+  maxResults  Int
+  status      String      @default("PENDING") // PENDING | RUNNING | DONE | FAILED
+  progress    Int         @default(0)
+  counts      Json?
+  error       String?
+  finishedAt  DateTime?
+  links       Json?       // { gammaUrl, pdfUrl, pptxUrl, driveLink, emailStatus }
+  articles    Article[]
+  gammaGens   GammaGen[]
+  driveFiles  DriveFile[]
+  emailLogs   EmailLog[]
+}
+
+model Source {
+  id          String    @id @default(uuid())
+  url         String    @unique
+  siteName    String?
+  title       String?
+  publishedAt DateTime?
+  fetchedAt   DateTime  @default(now())
+  articles    Article[]
+}
+
+model Article {
+  id        String   @id @default(uuid())
+  run       Run      @relation(fields: [runId], references: [id])
+  runId     String
+  source    Source   @relation(fields: [sourceId], references: [id])
+  sourceId  String
+  rawHtml   String?
+  textMd    String
+  lang      String?
+  summaries Summary[]
+}
+
+model Summary {
+  id        String   @id @default(uuid())
+  article   Article  @relation(fields: [articleId], references: [id])
+  articleId String   @unique
+  title     String
+  sourceName String
+  date      DateTime?
+  bullets   Json     // Json array of strings length=5
+  quote     String
+  links     Json     // Json array max 2
+  impact    String?
+}
+
+model GammaGen {
+  id           String  @id @default(uuid())
+  run          Run     @relation(fields: [runId], references: [id])
+  runId        String
+  generationId String
+  status       String
+  gammaUrl     String?
+  pdfUrl       String?
+  pptxUrl      String?
+}
+
+model DriveFile {
+  id          String @id @default(uuid())
+  run         Run    @relation(fields: [runId], references: [id])
+  runId       String
+  fileId      String
+  name        String
+  webViewLink String
+}
+
+model EmailLog {
+  id        String   @id @default(uuid())
+  run       Run      @relation(fields: [runId], references: [id])
+  runId     String
+  to        String[]
+  subject   String
+  messageId String?
+  status    String
+  error     String?
+}
+
+model OAuthToken {
+  id           String   @id @default(uuid())
+  provider     String   @default("google")
+  userId       String?
+  accessToken  String
+  refreshToken String?
+  expiryDate   DateTime
+  scopes       Json[]
+}
