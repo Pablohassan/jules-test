@@ -11,9 +11,15 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // Middleware
+// Disable ETag/304 to avoid client caching issues for API JSON (React Query + Nginx)
+app.set('etag', false);
 app.use(helmet());
 app.use(cors({ origin: process.env.WEB_ORIGIN }));
 app.use(express.json());
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 
 app.use((req, res, next) => {
   // @ts-ignore

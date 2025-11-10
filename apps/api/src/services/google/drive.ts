@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
-import { PrismaClient } from '@prisma/client';
+import prismaPkg from '@prisma/client';
+const { PrismaClient } = prismaPkg as typeof import('@prisma/client');
 import { getAuthenticatedClient } from './client.js';
 import { Readable } from 'stream';
 
@@ -58,6 +59,42 @@ export async function uploadFileToDrive(runId: string, fileUrl: string, fileName
   } catch (error) {
     console.error(`Failed to upload file to Google Drive for run ${runId}:`, error);
     // Log error and allow the run to continue
+    return null;
+  }
+}
+
+export async function uploadBufferToDrive(runId: string, fileBuffer: Buffer, fileName: string, mimeType: string) {
+  try {
+    const auth = await getAuthenticatedClient();
+    const drive = google.drive({ version: 'v3', auth });
+
+    const stream = new Readable();
+    stream.push(fileBuffer);
+    stream.push(null);
+
+    const response = await drive.files.create({
+      requestBody: {
+        name: fileName,
+        mimeType: mimeType,
+        parents: DRIVE_FOLDER_ID ? [DRIVE_FOLDER_ID] : undefined,
+      },
+      media: {
+        mimeType: mimeType,
+        body: stream,
+      },
+      fields: 'id, webViewLink',
+    });
+
+    const fileId = response.data.id;
+    const webViewLink = response.data.webViewLink;
+    if (!fileId || !webViewLink) throw new Error('Failed to create Drive file from buffer');
+
+    const driveFile = await prisma.driveFile.create({
+      data: { runId, fileId, name: fileName, webViewLink },
+    });
+    return driveFile;
+  } catch (error) {
+    console.error(`Failed to upload buffer to Google Drive for run ${runId}:`, error);
     return null;
   }
 }

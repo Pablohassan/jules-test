@@ -1,4 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import prismaPkg from '@prisma/client';
+const { PrismaClient } = prismaPkg as typeof import('@prisma/client');
 
 const prisma = new PrismaClient();
 
@@ -12,6 +13,19 @@ interface TavilyResult {
   score: number;
   raw_content: string;
 }
+
+const IGNORE_PATTERNS = [
+  /\/tag\//i,
+  /\/category\//i,
+  /\/topics?\//i,
+  /\/(search|login|subscribe|privacy|terms|about)\b/i,
+  /\/(feed|rss)\b/i,
+  /\bauthor\//i,
+];
+
+const IGNORE_DOMAINS = new Set([
+  'twitter.com', 'x.com', 'facebook.com', 'instagram.com', 'youtube.com',
+]);
 
 async function searchTavily(query: string, maxResults: number): Promise<TavilyResult[]> {
   const response = await fetch(TAVILY_API_URL, {
@@ -36,7 +50,18 @@ async function searchTavily(query: string, maxResults: number): Promise<TavilyRe
   }
 
   const data = await response.json();
-  return data.results || [];
+  const results: TavilyResult[] = data.results || [];
+  // Filter out obvious non-article pages
+  return results.filter((r: TavilyResult) => {
+    try {
+      const u = new URL(r.url);
+      if (IGNORE_DOMAINS.has(u.hostname)) return false;
+      if (IGNORE_PATTERNS.some((re) => re.test(u.pathname))) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 export async function searchArticles(runId: string, keywords: string[], daysBack: number, maxResults: number) {

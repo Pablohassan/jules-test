@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
-import { PrismaClient } from '@prisma/client';
+import prismaPkg from '@prisma/client';
+const { PrismaClient } = prismaPkg as typeof import('@prisma/client');
 import { getAuthenticatedClient } from './client.js';
 import nodemailer from 'nodemailer';
 import { Readable } from 'stream';
@@ -15,17 +16,20 @@ async function fetchFileAsBuffer(url: string): Promise<Buffer> {
     return Buffer.from(arrayBuffer);
 }
 
-export async function sendEmail(runId: string, to: string[], subject: string, html: string, pdfUrl: string, gammaUrl: string) {
+export async function sendEmail(
+  runId: string,
+  to: string[],
+  subject: string,
+  html: string,
+  pdfUrl: string,
+  gammaUrl: string,
+  pdfBufferOverride?: Buffer,
+) {
     try {
         const auth = await getAuthenticatedClient();
         const gmail = google.gmail({ version: 'v1', auth });
-
-        const tokenInfo = await auth.getTokenInfo(auth.credentials.access_token!);
-        const emailAddress = tokenInfo.email;
-
-        if (!emailAddress) {
-            throw new Error('Could not determine user email address from token.');
-        }
+        const emailAddress = process.env.GMAIL_SENDER;
+        if (!emailAddress) throw new Error('GMAIL_SENDER is not set');
 
         const transport = nodemailer.createTransport({
             service: 'gmail',
@@ -39,23 +43,23 @@ export async function sendEmail(runId: string, to: string[], subject: string, ht
             },
         });
 
-        const pdfBuffer = await fetchFileAsBuffer(pdfUrl);
+        const pdfBuffer = pdfBufferOverride || (pdfUrl ? await fetchFileAsBuffer(pdfUrl) : undefined);
 
         const mailOptions = {
             from: process.env.GMAIL_SENDER,
             to: to.join(','),
             subject: subject,
             html: `${html}<p>View the presentation online: <a href="${gammaUrl}">${gammaUrl}</a></p>`,
-            attachments: [
+            attachments: pdfBuffer ? [
                 {
                     filename: 'presentation.pdf',
                     content: pdfBuffer,
                     contentType: 'application/pdf',
                 },
-            ],
+            ] : [],
         };
 
-        const result = await transport.sendMail(mailOptions);
+        const result = await transport.sendMail(mailOptions as any);
 
         await prisma.emailLog.create({
             data: {

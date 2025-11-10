@@ -1,10 +1,16 @@
-import OpenAI from 'openai';
-import { PrismaClient } from '@prisma/client';
+import OpenAI from "openai";
+import prismaPkg from "@prisma/client";
+const { PrismaClient } = prismaPkg as typeof import('@prisma/client');
 
 const prisma = new PrismaClient();
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+
+function getOpenAI() {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is missing. Set it to enable summarization.");
+  }
+  return new OpenAI({ apiKey });
+}
 
 const SYSTEM_PROMPT = `
 You are an expert summarizer for an AI-powered news watch.
@@ -27,25 +33,39 @@ Constraints:
 - All text should be in French.
 `;
 
-export async function summarizeArticle(articleId: string, textMd: string, meta: { title?: string, sourceName?: string, date?: Date }) {
+export async function summarizeArticle(
+  articleId: string,
+  textMd: string,
+  meta: { title?: string; sourceName?: string; date?: Date }
+) {
   try {
-    const response = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: SYSTEM_PROMPT,
-        },
-        {
-          role: 'user',
-          content: `Summarize the following article:\n\nTitle: ${meta.title}\nSource: ${meta.sourceName}\nDate: ${meta.date}\n\n${textMd}`,
-        },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.3,
+    const openai = getOpenAI();
+    // Enforce GPT‑5 family as requested
+    const configuredModel = process.env.OPENAI_MODEL || "gpt-5-mini";
+    const model = configuredModel.startsWith("gpt-5") ? configuredModel : "gpt-5-mini";
+
+    // Guard against context overflow: approximate by characters (1 token ~ 4 chars)
+    const MAX_CHARS = Number(process.env.OPENAI_MAX_CHARS || 200000); // ~50k tokens
+    const content = textMd.length > MAX_CHARS ? textMd.slice(0, MAX_CHARS) : textMd;
+    const dateStr = meta.date ? new Date(meta.date).toISOString() : '';
+    const response = await withOpenAIRetry(async () => {
+      return openai.chat.completions.create({
+        model,
+        messages: [
+          {
+            role: "system",
+            content: SYSTEM_PROMPT,
+          },
+          {
+            role: "user",
+            content: `Summarize the following article (the text may be truncated for length):\n\nTitle: ${meta.title}\nSource: ${meta.sourceName}\nDate: ${dateStr}\n\n${content}`,
+          },
+        ],
+        response_format: { type: "json_object" },
+      });
     });
 
-    const summaryJson = JSON.parse(response.choices[0].message.content || '{}');
+    const summaryJson = JSON.parse(response.choices[0].message.content || "{}");
 
     // Basic validation
     if (
@@ -54,7 +74,7 @@ export async function summarizeArticle(articleId: string, textMd: string, meta: 
       !Array.isArray(summaryJson.bullets) ||
       summaryJson.bullets.length !== 5
     ) {
-      throw new Error('Invalid JSON format received from OpenAI');
+      throw new Error("Invalid JSON format received from OpenAI");
     }
 
     const summary = await prisma.summary.create({
@@ -76,4 +96,32 @@ export async function summarizeArticle(articleId: string, textMd: string, meta: 
     // Log error and allow the run to continue
     return null;
   }
+}
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Basic retry with exponential backoff for 429/5xx. Do not retry on hard quota.
+async function withOpenAIRetry<T>(fn: () => Promise<T>): Promise<T> {
+  const maxAttempts = Number(process.env.OPENAI_RETRY_ATTEMPTS || 3);
+  const baseDelay = Number(process.env.OPENAI_RETRY_BASE_MS || 500);
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      lastErr = e;
+      const status = e?.status || e?.response?.status;
+      const code = e?.error?.code || e?.code;
+      const msg = e?.message || '';
+      const retryable = status === 429 || (status >= 500 && status < 600);
+      const hardQuota = code === 'insufficient_quota' || /insufficient_quota|billing|quota/i.test(msg);
+      if (hardQuota) break;
+      if (!retryable || attempt === maxAttempts) break;
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
 }

@@ -4,6 +4,7 @@
 generator client {
   provider = "prisma-client-js"
   output   = "../node_modules/.prisma/client"
+  binaryTargets = ["native", "linux-arm64-openssl-1.1.x", "linux-arm64-openssl-3.0.x"]
 }
 
 datasource db {
@@ -20,6 +21,7 @@ model Run {
   status      String      @default("PENDING") // PENDING | RUNNING | DONE | FAILED
   progress    Int         @default(0)
   counts      Json?
+  meta        Json?
   error       String?
   finishedAt  DateTime?
   links       Json?       // { gammaUrl, pdfUrl, pptxUrl, driveLink, emailStatus }

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getGoogleAuthURL, handleGoogleCallback } from '@/services/google/auth.js';
+import { getGoogleAuthURL, handleGoogleCallback, disconnectGoogle } from '@/services/google/auth.js';
 
 const router: Router = Router();
 
@@ -19,3 +19,12 @@ router.get('/google/callback', async (req, res, next) => {
 });
 
 export default router;
+// Disconnect Google and remove stored token
+router.post('/google/disconnect', async (_req, res, next) => {
+  try {
+    await disconnectGoogle();
+    res.json({ disconnected: true });
+  } catch (error) {
+    next(error);
+  }
+});

@@ -1,15 +1,15 @@
-version: '3.8'
+version: "3.8"
 
 services:
   db:
     image: postgres:15
     restart: always
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      POSTGRES_USER: pablito
+      POSTGRES_PASSWORD: 2belin
       POSTGRES_DB: veille
     ports:
-      - '5432:5432'
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -17,7 +17,7 @@ services:
     image: redis:7
     restart: always
     ports:
-      - '6379:6379'
+      - "6379:6379"
     volumes:
       - redis_data:/data
 
@@ -25,22 +25,49 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    # The Puppeteer base image resolves to amd64; on Apple Silicon this avoids
+    # platform warnings by running under emulation.
+    platform: linux/amd64
+    # Give Prisma/Node a tmpfs to avoid ENOSPC on /tmp when the VM disk is tight
+    tmpfs:
+      - /tmp
     ports:
-      - '3000:3000'
+      - "3000:3000"
     depends_on:
       - db
       - redis
     environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/veille
+      - DATABASE_URL=postgresql://pablito:2belin@db:5432/veille
       - REDIS_URL=redis://redis:6379
       - WEB_ORIGIN=http://localhost:5173
+      # External service keys (loaded from root .env via variable substitution)
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - GAMMA_API_KEY=${GAMMA_API_KEY}
+      - GMAIL_SENDER=${GMAIL_SENDER}
+      - DRIVE_FOLDER_ID=${DRIVE_FOLDER_ID}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/google/callback
+      # Remove stray comma typo above and set proper defaults below
+      - OPENAI_MAX_CHARS=60000
+      - OPENAI_RETRY_ATTEMPTS=3
+      - OPENAI_RETRY_BASE_MS=750
+      - OPENAI_SUMMARY_CONCURRENCY=1
+      - OPENAI_SUMMARY_BASE_DELAY_MS=300
+      - JINA_API_URL=${JINA_API_URL}
+      - JINA_API_KEY=${JINA_API_KEY}
+      - GAMMA_API_AUTH_STYLE=${GAMMA_API_AUTH_STYLE}
+      - GAMMA_EXPORTS=${GAMMA_EXPORTS}
+      - FORCE_GAMMA_API_DOWNLOAD=${FORCE_GAMMA_API_DOWNLOAD}
 
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
     ports:
-      - '5173:80'
+      - "5173:80"
     depends_on:
       - api
 

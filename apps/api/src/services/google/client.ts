@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
-import { PrismaClient } from '@prisma/client';
+import prismaPkg from '@prisma/client';
+const { PrismaClient } = prismaPkg as typeof import('@prisma/client');
 import { OAuth2Client } from 'google-auth-library';
 
 const prisma = new PrismaClient();
@@ -11,10 +12,14 @@ export async function getAuthenticatedClient(): Promise<OAuth2Client> {
     process.env.GOOGLE_REDIRECT_URI
   );
 
-  const token = await prisma.oAuthToken.findFirst({
-    where: { provider: 'google' },
+  // Prefer a token that has a refreshToken; fall back to any token
+  let token = await prisma.oAuthToken.findFirst({
+    where: { provider: 'google', NOT: { refreshToken: null } },
     orderBy: { expiryDate: 'desc' },
   });
+  if (!token) {
+    token = await prisma.oAuthToken.findFirst({ where: { provider: 'google' }, orderBy: { expiryDate: 'desc' } });
+  }
 
   if (!token) {
     throw new Error('No Google OAuth token found. Please authenticate.');

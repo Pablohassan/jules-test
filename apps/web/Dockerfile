@@ -16,7 +16,11 @@ RUN pnpm --filter web build
 
 FROM nginx:1.25-alpine AS production
 
+# Copy built assets
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
+
+# Add nginx config to proxy API and support SPA routing
+COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 
