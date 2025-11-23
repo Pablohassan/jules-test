@@ -11,7 +11,7 @@ function getISOWeek(date: Date): number {
   return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
 }
 
-export function buildMarkdown(summaries: SummaryWithSource[]): string {
+export function buildMarkdown(summaries: SummaryWithSource[], useParagraphs:boolean = false): string {
   const weekNumber = getISOWeek(new Date());
   let markdown = `
 # Veille IA — Semaine ${weekNumber}
@@ -22,6 +22,13 @@ export function buildMarkdown(summaries: SummaryWithSource[]): string {
 `;
 
   for (const summary of summaries) {
+    const bullets = (summary.bullets as unknown as string[]) || [];
+    
+    // For magazine style: create flowing paragraphs from bullets
+    const content = useParagraphs
+      ? bullets.join(' ') // Join bullets into flowing paragraph
+      : bullets.map(b => `- ${b}`).join('\n'); // Keep classic bullet list
+
     markdown += `
 ## ${summary.title}
 
@@ -29,11 +36,7 @@ export function buildMarkdown(summaries: SummaryWithSource[]): string {
 **Date:** ${summary.date ? new Date(summary.date).toLocaleDateString('fr-FR') : 'N/A'}
 **Lien:** ${summary.article.source.url}
 
-- ${summary.bullets[0]}
-- ${summary.bullets[1]}
-- ${summary.bullets[2]}
-- ${summary.bullets[3]}
-- ${summary.bullets[4]}
+${content}
 
 > "${summary.quote}"
 

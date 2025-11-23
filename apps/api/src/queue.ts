@@ -52,6 +52,7 @@ interface RunJobData {
   keywords: string[];
   daysBack: number;
   maxResults: number;
+  veilleId?: string;
   gammaOptions?: {
     exportAs?: 'pdf' | 'pptx'
     textMode?: 'generate' | 'condense' | 'preserve'
@@ -60,21 +61,58 @@ interface RunJobData {
     numCards?: number
     additionalInstructions?: string
     folderIds?: string[]
+    cardSplit?: 'auto' | 'inputTextBreaks'
+    textOptions?: { language?: string }
+    imageOptions?: { model?: string }
+    cardOptions?: Record<string, unknown>
   }
 }
 
 new Worker('orchestration', async (job: Job<RunJobData>) => {
-  const { runId, keywords, daysBack, maxResults } = job.data;
+  const { runId, keywords, daysBack, maxResults, veilleId } = job.data;
 
   try {
+    // Fetch context if veilleId is present
+    let searchKeywords = keywords;
+    let contextInstructions = '';
+    
+    if (veilleId) {
+      const veille = await prisma.veille.findUnique({
+        where: { id: veilleId },
+        include: { client: true }
+      });
+      if (veille) {
+        // Combine run keywords and veille keywords
+        const combinedKeywords = [...new Set([...keywords, ...veille.keywords])];
+        
+        // If still empty, fallback to Client Context
+        if (combinedKeywords.length === 0 && veille.client) {
+            if (veille.client.sector) searchKeywords.push(veille.client.sector);
+            if (veille.client.name) searchKeywords.push(veille.client.name);
+            // Add "Actualités" or "Trends" to make it a search query
+            searchKeywords.push('Actualités');
+        } else {
+            searchKeywords = combinedKeywords;
+        }
+
+        contextInstructions = `
+          Context:
+          Client: ${veille.client.name} (${veille.client.sector || 'General'}, ${veille.client.size || ''})
+          Description: ${veille.client.description || ''}
+          Watch Name: ${veille.name}
+          Focus: Provide insights relevant to this specific client's sector and size.
+        `;
+      }
+    }
+
     // 1. Search
     await prisma.run.update({ where: { id: runId }, data: { status: 'RUNNING', progress: 10 } });
-    const sources = await searchArticles(runId, keywords, daysBack, maxResults);
+    const sources = await searchArticles(runId, searchKeywords, daysBack, maxResults);
     await prisma.run.update({ where: { id: runId }, data: { counts: { sources: sources.length } } });
 
     // 2. Ingest
     await prisma.run.update({ where: { id: runId }, data: { progress: 20 } });
-    const articles = (await Promise.all(sources.map(source => fetchAndRead(runId, source)))).filter(Boolean);
+    const articles = (await Promise.all(sources.map(source => fetchAndRead(runId, source)))).filter((a): a is NonNullable<typeof a> => a !== null);
     await prisma.run.update({ where: { id: runId }, data: { counts: { sources: sources.length, articles: articles.length } } });
 
     // 3. Summarize
@@ -92,6 +130,7 @@ new Worker('orchestration', async (job: Job<RunJobData>) => {
           title: article.source?.title || undefined,
           sourceName: article.source?.siteName || undefined,
           date: article.source?.publishedAt || undefined,
+          additionalContext: contextInstructions,
         });
         if (s) summaries.push(s);
         // Update counts and progress incrementally (40%..60%)
@@ -111,6 +150,7 @@ new Worker('orchestration', async (job: Job<RunJobData>) => {
               title: article.source?.title || undefined,
               sourceName: article.source?.siteName || undefined,
               date: article.source?.publishedAt || undefined,
+              additionalContext: contextInstructions,
             })
           )
         );
@@ -137,7 +177,11 @@ new Worker('orchestration', async (job: Job<RunJobData>) => {
       return;
     }
     await prisma.run.update({ where: { id: runId }, data: { progress: 60 } });
-    const markdown = buildMarkdown(summariesWithSource);
+    // Detect if user wants paragraphs instead of bullets based on instructions
+    const instructions = job.data.gammaOptions?.additionalInstructions?.toLowerCase() || '';
+    const useParagraphs = instructions.includes('paragraph') || instructions.includes('magazine') || instructions.includes('avoid bullet') || instructions.includes('no bullet');
+
+    const markdown = buildMarkdown(summariesWithSource, useParagraphs);
     let gammaGen: any = null;
     // Avoid duplicate generations for the same run
     const existingGamma = await prisma.gammaGen.findFirst({ where: { runId } });
@@ -145,7 +189,50 @@ new Worker('orchestration', async (job: Job<RunJobData>) => {
       gammaGen = existingGamma;
     } else if (process.env.GAMMA_API_KEY) {
       try {
-        gammaGen = await generatePresentation(runId, markdown, job.data.gammaOptions);
+        // Build language-specific instructions to force Gamma API to respect the language parameter
+        const languageCode = job.data.gammaOptions?.textOptions?.language;
+        const languageMap: Record<string, string> = {
+          'fr': 'FRENCH',
+          'en': 'ENGLISH',
+          'es': 'SPANISH',
+          'de': 'GERMAN',
+          'it': 'ITALIAN',
+          'pt': 'PORTUGUESE',
+          'nl': 'DUTCH',
+          'pl': 'POLISH',
+          'ru': 'RUSSIAN',
+          'ja': 'JAPANESE',
+          'zh': 'CHINESE',
+          'ar': 'ARABIC',
+        };
+        
+        const languageInstructions = languageCode && languageMap[languageCode.toLowerCase()]
+          ? `CRITICAL INSTRUCTION: Generate ALL content (titles, text, labels, buttons, etc.) EXCLUSIVELY in ${languageMap[languageCode.toLowerCase()]} language. Do NOT use English or any other language. Every single word must be in ${languageMap[languageCode.toLowerCase()]}.`
+          : '';
+
+        const finalInstructions = [
+          job.data.gammaOptions?.additionalInstructions,
+          languageInstructions
+        ].filter(Boolean).join('\n\n');
+
+        // Build complete options object ensuring ALL options are passed to Gamma API
+        const enhancedOptions = {
+          textMode: job.data.gammaOptions?.textMode || 'preserve',
+          exportAs: job.data.gammaOptions?.exportAs || 'pdf',
+          format: job.data.gammaOptions?.format || 'presentation',
+          additionalInstructions: finalInstructions || undefined,
+          numCards: job.data.gammaOptions?.numCards,
+          cardSplit: job.data.gammaOptions?.cardSplit,
+          themeId: job.data.gammaOptions?.themeId,
+          folderIds: job.data.gammaOptions?.folderIds,
+          textOptions: job.data.gammaOptions?.textOptions,
+          imageOptions: job.data.gammaOptions?.imageOptions,
+          cardOptions: job.data.gammaOptions?.cardOptions,
+        };
+
+        console.log('[Queue] Gamma options being sent:', JSON.stringify(enhancedOptions, null, 2));
+
+        gammaGen = await generatePresentation(runId, markdown, enhancedOptions);
       } catch (e) {
         await prisma.run.update({ where: { id: runId }, data: { error: `Gamma generation failed: ${(e as Error).message}` } });
       }
@@ -155,56 +242,70 @@ new Worker('orchestration', async (job: Job<RunJobData>) => {
     await prisma.run.update({ where: { id: runId }, data: { progress: 80 } });
     let driveFile: any = null;
     const token = await prisma.oAuthToken.findFirst({ where: { provider: 'google' } });
-    // If Gamma finished without pdfUrl, try to fetch exports now
-    if (gammaGen && !gammaGen.pdfUrl) {
+    
+    // If Gamma finished without exports, try to fetch them now
+    if (gammaGen && (!gammaGen.pdfUrl || !gammaGen.pptxUrl)) {
       try {
-        const extra = await ensureGammaExports(gammaGen.generationId);
-        if (extra?.pdfUrl) {
-          gammaGen = await prisma.gammaGen.findFirst({ where: { id: gammaGen.id } });
-        }
+        await ensureGammaExports(gammaGen.generationId);
+        // Reload gammaGen to get updated URLs
+        gammaGen = await prisma.gammaGen.findFirst({ where: { id: gammaGen.id } });
       } catch {}
     }
+
     const hasPdf = Boolean(gammaGen?.pdfUrl);
+    const hasPptx = Boolean(gammaGen?.pptxUrl);
     const hasShare = Boolean(gammaGen?.gammaUrl);
     const allowHeadless = !forceGammaDownload;
-    const hasDeliverable = hasPdf || (allowHeadless && hasShare);
+    
+    // We consider it deliverable if we have a file (PDF or PPTX) OR if we can share the link (and headless is allowed)
+    const hasDeliverable = hasPdf || hasPptx || (allowHeadless && hasShare);
     const canDistribute = Boolean(gammaGen && hasDeliverable && process.env.GMAIL_SENDER && process.env.DRIVE_FOLDER_ID && token && token.refreshToken);
+
     if (canDistribute) {
       try {
-        let finalPdfUrl: string | null = gammaGen!.pdfUrl ?? null;
+        let finalFileUrl: string | null = gammaGen?.pdfUrl || gammaGen?.pptxUrl || null;
+        let fileType = gammaGen?.pdfUrl ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+        let fileExt = gammaGen?.pdfUrl ? 'pdf' : 'pptx';
         let renderedBuffer: Buffer | null = null;
-        if (!finalPdfUrl && allowHeadless && gammaGen?.gammaUrl) {
-          // Headless render fallback
+
+        // If no file URL but we have a share link and allow headless, try to render PDF
+        if (!finalFileUrl && allowHeadless && gammaGen?.gammaUrl) {
           try {
             renderedBuffer = await renderUrlToPdf(gammaGen.gammaUrl);
+            fileType = 'application/pdf';
+            fileExt = 'pdf';
           } catch (e) {
             throw new Error(`Headless render failed: ${(e as Error).message}`);
           }
         }
 
+        const timestamp = new Date().toISOString().split('T')[0];
+        const fileName = `Veille IA - ${timestamp}.${fileExt}`;
+        const emailSubject = 'Veille IA - Nouvelle présentation';
+        const emailBody = `<p>La présentation de la semaine est disponible.</p>`;
+
         if (renderedBuffer) {
-          driveFile = await uploadBufferToDrive(runId, renderedBuffer, `Veille IA - ${new Date().toISOString()}.pdf`, 'application/pdf');
-          await sendEmail(runId, [process.env.GMAIL_SENDER!], 'Veille IA - Nouvelle présentation', `<p>La présentation de la semaine est disponible.</p>`, '', gammaGen!.gammaUrl!, renderedBuffer);
-        } else if (finalPdfUrl) {
-          // If the pdfUrl requires auth, download via API and upload buffer
+          driveFile = await uploadBufferToDrive(runId, renderedBuffer, fileName, fileType);
+          await sendEmail(runId, [process.env.GMAIL_SENDER!], emailSubject, emailBody, '', gammaGen!.gammaUrl!, renderedBuffer);
+        } else if (finalFileUrl) {
+          // Download asset to buffer to upload to Drive/Email
           let buffer: Buffer | null = null;
           try {
-            const apiBase = process.env.GAMMA_API_BASE || 'https://api.gamma.app';
-            if (forceGammaDownload || finalPdfUrl.startsWith(apiBase) || (process.env.GAMMA_API_BASE && finalPdfUrl.startsWith(process.env.GAMMA_API_BASE))) {
-              buffer = await downloadAssetToBuffer(finalPdfUrl);
-            } else if (finalPdfUrl.startsWith('https://')) {
-              buffer = await downloadAssetToBuffer(finalPdfUrl);
-            }
-          } catch {}
+             buffer = await downloadAssetToBuffer(finalFileUrl);
+          } catch (e) {
+             console.error('Failed to download asset buffer:', e);
+          }
+
           if (buffer) {
-            driveFile = await uploadBufferToDrive(runId, buffer, `Veille IA - ${new Date().toISOString()}.pdf`, 'application/pdf');
-            await sendEmail(runId, [process.env.GMAIL_SENDER!], 'Veille IA - Nouvelle présentation', `<p>La présentation de la semaine est disponible.</p>`, '', gammaGen!.gammaUrl!, buffer);
+            driveFile = await uploadBufferToDrive(runId, buffer, fileName, fileType);
+            await sendEmail(runId, [process.env.GMAIL_SENDER!], emailSubject, emailBody, '', gammaGen!.gammaUrl!, buffer);
           } else {
-            driveFile = await uploadFileToDrive(runId, finalPdfUrl, `Veille IA - Semaine ${new Date().toISOString()}`, 'application/pdf');
-            await sendEmail(runId, [process.env.GMAIL_SENDER!], 'Veille IA - Nouvelle présentation', `<p>La présentation de la semaine est disponible.</p>`, finalPdfUrl, gammaGen!.gammaUrl!);
+            // Fallback: Upload by URL (if Drive supports it) and send Link in email
+            driveFile = await uploadFileToDrive(runId, finalFileUrl, fileName, fileType);
+            await sendEmail(runId, [process.env.GMAIL_SENDER!], emailSubject, emailBody, finalFileUrl, gammaGen!.gammaUrl!);
           }
         } else {
-          throw new Error('No PDF available and no share link to render');
+          throw new Error('No file available and no share link to render');
         }
 
         await prisma.run.update({ where: { id: runId }, data: { counts: { sources: sources.length, articles: articles.length, summaries: summaries.length, gamma: 1 } } });
@@ -213,14 +314,13 @@ new Worker('orchestration', async (job: Job<RunJobData>) => {
       }
     } else if (gammaGen && token && !token.refreshToken) {
       await prisma.run.update({ where: { id: runId }, data: { error: 'Google token lacks refresh permission. Click Connect Google again (consent+offline).' } });
-    } else if (gammaGen && !gammaGen.pdfUrl) {
+    } else if (gammaGen && !hasDeliverable) {
       // Schedule background distribution retries
       const baseDelay = Number(process.env.GAMMA_DISTRIBUTION_BASE_DELAY_MS || 60000);
-      const maxAttempts = Number(process.env.GAMMA_DISTRIBUTION_MAX_ATTEMPTS || 5);
       await distributionQueue.add('distribute', { runId, attempt: 1 }, { jobId: `dist-${runId}-1`, delay: baseDelay, removeOnComplete: true });
       const msg = forceGammaDownload
-        ? 'Gamma PDF not ready yet (force download enabled); distribution will retry automatically.'
-        : 'Gamma PDF not ready yet; distribution will retry in the background.';
+        ? 'Gamma exports not ready yet (force download enabled); distribution will retry automatically.'
+        : 'Gamma exports not ready yet; distribution will retry in the background.';
       await prisma.run.update({ where: { id: runId }, data: { error: msg } });
     }
 

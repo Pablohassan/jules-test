@@ -21,16 +21,27 @@ const gammaOptionsSchema = z.object({
 }).optional();
 
 const createRunSchema = z.object({
-  keywords: z.array(z.string()).min(1),
+  keywords: z.array(z.string()).optional(),
   daysBack: z.number().min(1).max(30),
   maxResults: z.number().min(1).max(50).optional().default(10),
   gammaOptions: gammaOptionsSchema,
+  veilleId: z.string().optional(),
+}).refine(data => {
+  // Keywords are required unless veilleId is provided
+  if (!data.veilleId && (!data.keywords || data.keywords.length === 0)) {
+    return false;
+  }
+  return true;
+}, {
+  message: "Keywords are required unless a Watch (Veille) is selected.",
+  path: ["keywords"]
 });
 
 // POST /api/runs
 router.post('/', async (req, res, next) => {
   try {
-    const { keywords, daysBack, maxResults, gammaOptions } = createRunSchema.parse(req.body);
+    console.log('[API /runs POST] Received payload:', JSON.stringify(req.body, null, 2));
+    const { keywords, daysBack, maxResults, gammaOptions, veilleId } = createRunSchema.parse(req.body);
     // Compute effective options and models snapshot
     const defaultGamma = { format: 'presentation', textMode: 'preserve', exportAs: 'pdf' } as any;
     const effectiveGamma = { ...defaultGamma, ...(gammaOptions || {}) } as any;
@@ -41,9 +52,10 @@ router.post('/', async (req, res, next) => {
 
     const run = await prisma.run.create({
       data: {
-        keywords,
+        keywords: keywords || [],
         daysBack,
         maxResults,
+        veilleId,
         meta: {
           gammaOptionsRequested: gammaOptions || null,
           gammaOptionsEffective: effectiveGamma,
@@ -54,10 +66,11 @@ router.post('/', async (req, res, next) => {
 
     await orchestrationQueue.add('run', {
       runId: run.id,
-      keywords,
+      keywords: keywords || [],
       daysBack,
       maxResults,
       gammaOptions,
+      veilleId,
     }, { jobId: run.id, removeOnComplete: true });
 
     res.status(201).json({ runId: run.id });

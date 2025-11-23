@@ -12,6 +12,32 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Client {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  name        String
+  sector      String?
+  size        String?  // TPE, PME, ETI, GE
+  description String?
+  email       String   // Primary contact email
+  veilles     Veille[]
+}
+
+model Veille {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  client      Client   @relation(fields: [clientId], references: [id])
+  clientId    String
+  name        String
+  keywords    String[] // Specific keywords for this watch
+  schedule    String?  // Cron expression or simple "weekly", "daily"
+  enabled     Boolean  @default(true)
+  gammaOptions Json?   // Configuration for Gamma generation
+  runs        Run[]
+}
+
 model Run {
   id          String      @id @default(uuid())
   createdAt   DateTime    @default(now())
@@ -25,6 +51,8 @@ model Run {
   error       String?
   finishedAt  DateTime?
   links       Json?       // { gammaUrl, pdfUrl, pptxUrl, driveLink, emailStatus }
+  veille      Veille?     @relation(fields: [veilleId], references: [id])
+  veilleId    String?
   articles    Article[]
   gammaGens   GammaGen[]
   driveFiles  DriveFile[]

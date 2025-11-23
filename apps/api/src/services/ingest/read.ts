@@ -108,6 +108,9 @@ export async function fetchAndRead(runId: string, source: Source) {
         textMd: markdownContent,
         // lang detection would be implemented here
       },
+      include: {
+        source: true,
+      }
     });
     return article;
   } else {

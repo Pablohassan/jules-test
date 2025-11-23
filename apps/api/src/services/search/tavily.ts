@@ -27,7 +27,7 @@ const IGNORE_DOMAINS = new Set([
   'twitter.com', 'x.com', 'facebook.com', 'instagram.com', 'youtube.com',
 ]);
 
-async function searchTavily(query: string, maxResults: number): Promise<TavilyResult[]> {
+async function searchTavily(query: string, maxResults: number, daysBack: number): Promise<TavilyResult[]> {
   const response = await fetch(TAVILY_API_URL, {
     method: 'POST',
     headers: {
@@ -39,9 +39,10 @@ async function searchTavily(query: string, maxResults: number): Promise<TavilyRe
       search_depth: 'advanced',
       include_answer: false,
       include_raw_content: false,
-      max_results: maxResults,
+      max_results: maxResults * 2, // Request more to compensate for date filtering
       include_domains: [],
       exclude_domains: [],
+      days: daysBack, // Tavily parameter to limit search to recent results
     }),
   });
 
@@ -67,9 +68,13 @@ async function searchTavily(query: string, maxResults: number): Promise<TavilyRe
 export async function searchArticles(runId: string, keywords: string[], daysBack: number, maxResults: number) {
   const query = keywords.join(' OR ');
 
-  // Tavily's API doesn't have a specific `daysBack` filter,
-  // so we'd rely on the freshness of their index or filter by date later if available.
-  const results = await searchTavily(query, maxResults);
+  // Tavily now includes days parameter + we filter by publication date
+  const results = await searchTavily(query, maxResults, daysBack);
+
+  // Calculate cutoff date (today - daysBack)
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - daysBack);
+  console.log(`[Search] Filtering articles published after ${cutoffDate.toISOString()} (last ${daysBack} days)`);
 
   const uniqueUrls = new Set<string>();
   const sourcesToCreate = [];

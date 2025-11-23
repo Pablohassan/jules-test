@@ -49,6 +49,7 @@ const createRunPayloadSchema = z.object({
   daysBack: z.number(),
   maxResults: z.number(),
   gammaOptions: gammaOptionsSchema,
+  veilleId: z.string().optional(),
 });
 
 export type CreateRunPayload = z.infer<typeof createRunPayloadSchema>;
@@ -120,5 +121,18 @@ export async function getFeatures() {
 export async function disconnectGoogle() {
   const res = await fetch(`${API_BASE_URL}/auth/google/disconnect`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to disconnect Google');
+  return res.json();
+}
+
+export async function getClients() {
+  const res = await fetch(`${API_BASE_URL}/clients`);
+  if (!res.ok) throw new Error('Failed to fetch clients');
+  return res.json();
+}
+
+export async function getVeilles(clientId?: string) {
+  const url = clientId ? `${API_BASE_URL}/veilles?clientId=${clientId}` : `${API_BASE_URL}/veilles`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to fetch veilles');
   return res.json();
 }

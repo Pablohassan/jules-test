@@ -184,42 +184,43 @@ async function createPresentation(markdown: string, options: GammaCreateOptions 
     ? ['bearer', 'x-api-key']
     : ['x-api-key', 'bearer'];
 
-  // Build a minimal payload first; some tenants reject unknown/extra fields.
-  const minimalPayload: any = {
+  // Build complete payload with ALL options (no more minimal/extended split)
+  const payload: any = {
     inputText: markdown,
     textMode: options.textMode || 'preserve',
     format: options.format || 'presentation',
   };
-  if (options.exportAs) minimalPayload.exportAs = options.exportAs;
+  
+  // Add all optional fields if provided
+  if (options.exportAs) payload.exportAs = options.exportAs;
+  // Only include exports array if exportAs is NOT set (to avoid conflicts)
+  if (!options.exportAs && GAMMA_EXPORTS.length) payload.exports = GAMMA_EXPORTS;
+  if (options.themeId) payload.themeId = options.themeId;
+  if (options.numCards) payload.numCards = options.numCards;
+  if (options.additionalInstructions) payload.additionalInstructions = options.additionalInstructions;
+  if (options.folderIds) payload.folderIds = options.folderIds;
+  if (options.cardSplit) payload.cardSplit = options.cardSplit;
+  if (options.textOptions) payload.textOptions = options.textOptions;
+  if (options.imageOptions) payload.imageOptions = options.imageOptions;
+  if (options.cardOptions) payload.cardOptions = options.cardOptions;
 
-  const extendedPayload: any = {
-    ...minimalPayload,
-    // Only include exports if explicitly configured
-    ...(GAMMA_EXPORTS.length ? { exports: GAMMA_EXPORTS } : {}),
-    ...(options.themeId ? { themeId: options.themeId } : {}),
-    ...(options.numCards ? { numCards: options.numCards } : {}),
-    ...(options.additionalInstructions ? { additionalInstructions: options.additionalInstructions } : {}),
-    ...(options.folderIds ? { folderIds: options.folderIds } : {}),
-    ...(options.cardSplit ? { cardSplit: options.cardSplit } : {}),
-    ...(options.textOptions ? { textOptions: options.textOptions } : {}),
-    ...(options.imageOptions ? { imageOptions: options.imageOptions } : {}),
-    ...(options.cardOptions ? { cardOptions: options.cardOptions } : {}),
-  };
+  console.log('[Gamma API] Payload being sent to API:', JSON.stringify(payload, null, 2));
 
   const errors: Array<{ url: string; status: number; text?: string }> = [];
   for (const style of authStyles) {
     for (const url of tryPaths) {
       try {
-        // Try minimal payload first
-        let response = await fetch(url, { method: 'POST', headers: gammaHeaders(undefined, style), body: JSON.stringify(minimalPayload) });
-        if (!response.ok && response.status === 400) {
-          // Retry with extended payload if minimal fails validation
-          response = await fetch(url, { method: 'POST', headers: gammaHeaders(undefined, style), body: JSON.stringify(extendedPayload) });
-        }
+        const response = await fetch(url, { 
+          method: 'POST', 
+          headers: gammaHeaders(undefined, style), 
+          body: JSON.stringify(payload) 
+        });
+        
         if (response.ok) {
           const data = await response.json();
           const generationId = (data as any).generationId || (data as any).id;
           if (!generationId) throw new Error('Missing generationId in response');
+          console.log(`[Gamma API] Successfully created presentation with ID: ${generationId}`);
           return { id: generationId, status: 'queued' } as GammaCreateResponse;
         } else {
           const text = await response.text().catch(() => '');
